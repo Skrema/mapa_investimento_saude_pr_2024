@@ -2,7 +2,6 @@ import pandas as pd
 import json
 import folium
 from branca.colormap import linear
-import urllib.request
 
 with open("geojs-41-mun.json", encoding="utf-8") as f:
     geojson_data = json.load(f)
@@ -20,7 +19,7 @@ except FileNotFoundError:
     df_pop = df_pop.iloc[1:].copy()
     df_pop.columns = ["nivel_cod", "nivel_nome", "unidade_cod", "unidade_nome", "populacao",
                       "municipio_cod_7", "municipio_nome", "ano_cod", "ano", "variavel_cod", "variavel_nome"]
-    df_pop = df_pop[df_pop["municipio_cod_7"].astype(str).str.startswith("41")].copy()
+    df_pop = df_pop[df_pop["municipio_cod_7"].astype(str).str.startswith("41")]
     df_pop["populacao"] = pd.to_numeric(df_pop["populacao"], errors="coerce")
     df_pop["IBGE_6"] = df_pop["municipio_cod_7"].astype(str).str[:6]
     df_pop.to_csv("populacao_pr_2024.csv", index=False, columns=["IBGE_6", "municipio_cod_7", "municipio_nome", "populacao"])
@@ -30,8 +29,7 @@ df["investimento_per_capita"] = df["Valor Liquido"] / df["populacao"]
 
 for feature in geojson_data["features"]:
     props = feature["properties"]
-    geo_id = str(props["id"])
-    props["id_6"] = geo_id[:6]
+    props["id_6"] = str(props["id"])[:6]
 
 geo_id_to_data = df.set_index("CO_MUNICIPIO_IBGE")["Valor Liquido"].to_dict()
 geo_id_to_nome = df.set_index("CO_MUNICIPIO_IBGE")["MUNICIPIO"].to_dict()
@@ -68,9 +66,7 @@ m = folium.Map(location=[-24.5, -51.5], zoom_start=7, tiles="CartoDB positron")
 tooltip = folium.features.GeoJsonTooltip(
     fields=["nome_municipio", "valor_investimento", "populacao", "investimento_per_capita"],
     aliases=["<b>Munic\u00edpio:</b>", "<b>Investimento (R$):</b>", "<b>Popula\u00e7\u00e3o:</b>", "<b>Investimento per capita (R$):</b>"],
-    localize=True,
-    sticky=False,
-    labels=True,
+    localize=True, sticky=False, labels=True,
     style="background-color: #F0EFEF; border: 1px solid black; border-radius: 3px; box-shadow: 3px; padding: 6px; font-size: 13px;",
     max_width=800,
 )
@@ -100,7 +96,7 @@ m.save(html_path)
 with open(html_path, "r", encoding="utf-8") as f:
     html = f.read()
 
-# Build the ranking data as a JavaScript array
+# Build ranking JS data
 rankings_js = "var municipiosData = [\n"
 for _, row in df.sort_values("Valor Liquido", ascending=False).iterrows():
     nome = row["MUNICIPIO"]
@@ -112,139 +108,23 @@ for _, row in df.sort_values("Valor Liquido", ascending=False).iterrows():
         rankings_js += f'  {{ibge:"{ibge}", nome:"{nome}", valor:{valor}, populacao:{pop}, percapita:{percap}}},\n'
 rankings_js += "];\n"
 
-head_inject = """
-<style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    #map-wrapper { position: relative; width: 100%; height: 100vh; display: flex; }
-    #map-container { flex: 1; height: 100vh; }
-    #map-container .folium-map { width: 100% !important; height: 100vh !important; }
-    #sidebar {
-        width: 340px; min-width: 340px; height: 100vh; overflow-y: auto;
-        background: #fff; border-left: 2px solid #ddd;
-        font-family: 'Segoe UI', Arial, sans-serif; z-index: 1000;
-        display: flex; flex-direction: column;
-    }
-    #sidebar-header {
-        padding: 16px; background: #2c3e50; color: white; text-align: center;
-    }
-    #sidebar-header h2 { font-size: 16px; margin: 0 0 4px; }
-    #sidebar-header p { font-size: 11px; opacity: 0.8; margin: 0; }
-    #search-box {
-        padding: 10px 12px; border-bottom: 1px solid #eee;
-    }
-    #search-box input {
-        width: 100%; padding: 8px 10px; border: 1px solid #ccc;
-        border-radius: 4px; font-size: 13px;
-    }
-    #search-box input:focus { outline: none; border-color: #3498db; }
-    #search-results {
-        max-height: 180px; overflow-y: auto; display: none;
-        position: absolute; width: 316px; background: white;
-        border: 1px solid #ccc; border-radius: 0 0 4px 4px;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.1); z-index: 9999;
-    }
-    #search-results div {
-        padding: 6px 10px; cursor: pointer; font-size: 12px; border-bottom: 1px solid #f0f0f0;
-    }
-    #search-results div:hover { background: #e8f4fd; }
-    .panel-section { padding: 10px 12px; border-bottom: 1px solid #eee; }
-    .panel-section h3 { font-size: 13px; color: #2c3e50; margin-bottom: 6px; }
-    .ranking-item {
-        display: flex; justify-content: space-between; align-items: center;
-        padding: 4px 0; font-size: 12px; border-bottom: 1px solid #f5f5f5; cursor: pointer;
-    }
-    .ranking-item:hover { background: #f9f9f9; }
-    .ranking-item .pos { color: #7f8c8d; width: 24px; font-weight: bold; }
-    .ranking-item .name { flex: 1; margin: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .ranking-item .value { font-weight: bold; color: #2c3e50; text-align: right; white-space: nowrap; }
-    .ranking-item .value.green { color: #27ae60; }
-    .ranking-item .value.red { color: #e74c3c; }
-    .tab-bar { display: flex; border-bottom: 1px solid #ddd; }
-    .tab-bar button {
-        flex: 1; padding: 8px; border: none; background: #f8f9fa;
-        cursor: pointer; font-size: 12px; font-weight: bold; color: #555;
-        transition: all 0.2s;
-    }
-    .tab-bar button.active { background: #fff; color: #2c3e50; border-bottom: 2px solid #2c3e50; }
-    .tab-bar button:hover { background: #eee; }
-    .tab-content { display: none; }
-    .tab-content.active { display: block; }
-    #btn-clear-selection {
-        display: block; width: calc(100% - 24px); margin: 10px 12px; padding: 8px;
-        background: #e74c3c; color: white; border: none; border-radius: 4px;
-        cursor: pointer; font-size: 13px; font-weight: bold;
-    }
-    #btn-clear-selection:hover { background: #c0392b; }
-    .legend {
-        position: absolute !important;
-        bottom: 30px !important;
-        left: 12px !important;
-        right: auto !important;
-        top: auto !important;
-        z-index: 1000 !important;
-        background: white !important;
-        padding: 8px !important;
-        border-radius: 4px !important;
-        box-shadow: 0 1px 5px rgba(0,0,0,0.2) !important;
-    }
-    .leaflet-control-layers { max-height: 300px; overflow-y: auto; }
-    #selected-info {
-        padding: 8px 12px; background: #e8f8f5; border-bottom: 1px solid #ddd;
-        display: none; font-size: 12px;
-    }
-</style>
-"""
+# Find key positions in the HTML
+body_start = html.find("<body>") + len("<body>")
+body_end = html.find("</body>")
+map_div_start = html.find('<div class="folium-map"')
+map_div_end = html.find("></div>", map_div_start) + len("></div>")
 
-title_overlay = """
-<div style="
-    position: absolute;
-    top: 10px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 9999;
-    background: rgba(255,255,255,0.92);
-    padding: 8px 20px;
-    border-radius: 6px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    font-family: 'Segoe UI', Arial, sans-serif;
-    text-align: center;
-    pointer-events: none;
-">
-    <h2 style="margin: 0; font-size: 16px; color: #2c3e50;">Investimento em Sa\u00fade por Munic\u00edpio - Paran\u00e1 (2024)</h2>
-    <p style="margin: 2px 0 0; font-size: 11px; color: #7f8c8d;">Repasses at\u00e9 junho de 2024 | Clique em um munic\u00edpio para detalhes</p>
-</div>
-"""
+# Extract body content
+body_content = html[body_start:body_end]
 
-# Build the full HTML with sidebar layout
-html = html.replace(
-    '<style>',
-    '<style>\n    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }\n'
-)
+# Everything before body
+before_body = html[:body_start - len("<body>")]
 
-# Wrap the map in a flex container
-html = html.replace(
-    '<div class="folium-map"',
-    '<div id="map-wrapper"><div id="map-container"><div class="folium-map"'
-)
+# Everything after body
+after_body = html[body_end:]
 
-# Close the wrapper after the map div ends and add sidebar
-# Find the closing </div> for the map div and inject sidebar before script tags
-html = html.replace(
-    '</head>',
-    head_inject + '\n</head>'
-)
-
-html = html.replace(
-    '<head>',
-    '<head><title>Investimento em Sa\u00fade - Paran\u00e1 2024</title>'
-)
-
-# Find the last script tag and inject sidebar before maps scripts
-# We'll inject the sidebar after 'var map_'
-
-# Inject sidebar HTML and JS before the closing </div> of the map
+# Build sidebar HTML
 sidebar_html = """
-</div> <!-- close map-container -->
 <div id="sidebar">
     <div id="sidebar-header">
         <h2>Investimento em Sa\u00fade - PR</h2>
@@ -273,16 +153,115 @@ sidebar_html = """
     </div>
     <button id="btn-clear-selection">Limpar Sele\u00e7\u00e3o</button>
 </div>
-</div> <!-- close map-wrapper -->
 """
 
-# Append our sidebar HTML and JS before the main scripts
-# Find the position of the first folium script
-script_pos = html.find('<script src="https://cdn.jsdelivr.net/npm/leaflet')
-html = html[:script_pos] + sidebar_html + html[script_pos:]
+# Build the map wrapper - replace the standalone map div with wrapped version
+old_map_div = html[map_div_start:map_div_end]
+new_map_div = '<div id="map-wrapper"><div id="map-container">' + old_map_div + '</div>' + sidebar_html + '</div>'
 
-# Add the JavaScript with all functionality
-js_extra = """
+html = html.replace(old_map_div, new_map_div, 1)
+
+# Add CSS to head
+extra_css = """
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    #map-wrapper { position: relative; width: 100%; height: 100vh; display: flex; }
+    #map-container { flex: 1; height: 100vh; }
+    #map-container .folium-map { width: 100% !important; height: 100vh !important; }
+    #sidebar {
+        width: 340px; min-width: 340px; height: 100vh; overflow-y: auto;
+        background: #fff; border-left: 2px solid #ddd;
+        font-family: 'Segoe UI', Arial, sans-serif; z-index: 1000;
+        display: flex; flex-direction: column;
+    }
+    #sidebar-header { padding: 16px; background: #2c3e50; color: white; text-align: center; }
+    #sidebar-header h2 { font-size: 16px; margin: 0 0 4px; }
+    #sidebar-header p { font-size: 11px; opacity: 0.8; margin: 0; }
+    #search-box { padding: 10px 12px; border-bottom: 1px solid #eee; position: relative; }
+    #search-box input {
+        width: 100%; padding: 8px 10px; border: 1px solid #ccc;
+        border-radius: 4px; font-size: 13px;
+    }
+    #search-box input:focus { outline: none; border-color: #3498db; }
+    #search-results {
+        max-height: 180px; overflow-y: auto; display: none;
+        position: absolute; width: 316px; background: white;
+        border: 1px solid #ccc; border-radius: 0 0 4px 4px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1); z-index: 9999;
+    }
+    #search-results div { padding: 6px 10px; cursor: pointer; font-size: 12px; border-bottom: 1px solid #f0f0f0; }
+    #search-results div:hover { background: #e8f4fd; }
+    .panel-section { padding: 10px 12px; border-bottom: 1px solid #eee; }
+    .panel-section h3 { font-size: 13px; color: #2c3e50; margin-bottom: 6px; }
+    .ranking-item {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 4px 0; font-size: 12px; border-bottom: 1px solid #f5f5f5; cursor: pointer;
+    }
+    .ranking-item:hover { background: #f9f9f9; }
+    .ranking-item .pos { color: #7f8c8d; width: 24px; font-weight: bold; }
+    .ranking-item .name { flex: 1; margin: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ranking-item .value { font-weight: bold; color: #2c3e50; text-align: right; white-space: nowrap; }
+    .ranking-item .value.green { color: #27ae60; }
+    .ranking-item .value.red { color: #e74c3c; }
+    .tab-bar { display: flex; border-bottom: 1px solid #ddd; }
+    .tab-bar button {
+        flex: 1; padding: 8px; border: none; background: #f8f9fa;
+        cursor: pointer; font-size: 12px; font-weight: bold; color: #555;
+    }
+    .tab-bar button.active { background: #fff; color: #2c3e50; border-bottom: 2px solid #2c3e50; }
+    .tab-bar button:hover { background: #eee; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    #btn-clear-selection {
+        display: block; width: calc(100% - 24px); margin: 10px 12px; padding: 8px;
+        background: #e74c3c; color: white; border: none; border-radius: 4px;
+        cursor: pointer; font-size: 13px; font-weight: bold;
+    }
+    #btn-clear-selection:hover { background: #c0392b; }
+    #selected-info {
+        padding: 8px 12px; background: #e8f8f5; border-bottom: 1px solid #ddd;
+        display: none; font-size: 12px;
+    }
+    .legend {
+        position: absolute !important;
+        bottom: 30px !important;
+        left: 12px !important;
+        right: auto !important;
+        top: auto !important;
+        z-index: 1000 !important;
+        background: white !important;
+        padding: 8px !important;
+        border-radius: 4px !important;
+        box-shadow: 0 1px 5px rgba(0,0,0,0.2) !important;
+    }
+    .leaflet-control-layers { max-height: 300px; overflow-y: auto; }
+</style>
+"""
+
+# Insert CSS after the first <style> tag or before </head>
+html = html.replace("</head>", extra_css + "\n</head>")
+
+# Add title overlay after the map wrapper starts
+title_overlay = """
+<div style="
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+    z-index: 9999; background: rgba(255,255,255,0.92);
+    padding: 8px 20px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    font-family: 'Segoe UI', Arial, sans-serif; text-align: center; pointer-events: none;
+">
+    <h2 style="margin: 0; font-size: 16px; color: #2c3e50;">Investimento em Sa\u00fade por Munic\u00edpio - Paran\u00e1 (2024)</h2>
+    <p style="margin: 2px 0 0; font-size: 11px; color: #7f8c8d;">Repasses at\u00e9 junho de 2024 | Clique em um munic\u00edpio para detalhes</p>
+</div>
+"""
+
+html = html.replace('<div id="map-wrapper">', '<div id="map-wrapper">' + title_overlay)
+
+# Add title
+html = html.replace("<head>", '<head><title>Investimento em Sa\u00fade - Paran\u00e1 2024</title>')
+
+# Add JavaScript at the end before </body>
+js_code = """
 <script>
 """ + rankings_js + """
 function formatCurrency(n) {
@@ -293,11 +272,9 @@ function formatNumber(n) {
     if (n == null || n === undefined) return "N/A";
     return Number(n).toLocaleString('pt-BR');
 }
-
 var selectedLayer = null;
 var municipiosIndex = {};
 municipiosData.forEach(function(d) { municipiosIndex[d.ibge] = d; });
-
 function getColorForValue(v, vmin, vmax) {
     if (v == null || v === undefined) return "#cccccc";
     var palette = ["#ffffcc","#ffeda0","#fed976","#feb24c","#fd8d3c","#fc4e2a","#e31a1c","#bd0026","#800026"];
@@ -305,7 +282,6 @@ function getColorForValue(v, vmin, vmax) {
     var idx = Math.min(palette.length - 1, Math.max(0, Math.round(ratio * (palette.length - 1))));
     return palette[idx];
 }
-
 function switchTab(tab) {
     document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
     document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
@@ -317,36 +293,31 @@ function switchTab(tab) {
         document.getElementById('tab-menores').classList.add('active');
     }
 }
-
 function buildRankings() {
     var sorted = municipiosData.slice().sort(function(a, b) { return b.valor - a.valor; });
     var top10 = sorted.slice(0, 10);
     var bottom10 = sorted.slice(-10).reverse();
-    
     var maioresHtml = '';
     top10.forEach(function(d, i) {
-        maioresHtml += '<div class="ranking-item" onclick="focusMunicipio(\\'' + d.ibge + '\\')">' +
+        maioresHtml += '<div class="ranking-item" onclick="focusMunicipio(\"' + d.ibge + '\')">' +
             '<span class="pos">' + (i+1) + '</span>' +
             '<span class="name">' + d.nome + '</span>' +
             '<span class="value green">' + formatCurrency(d.valor) + '</span></div>';
     });
     document.getElementById('tab-maiores').innerHTML = maioresHtml;
-    
     var menoresHtml = '';
     bottom10.forEach(function(d, i) {
-        menoresHtml += '<div class="ranking-item" onclick="focusMunicipio(\\'' + d.ibge + '\\')">' +
+        menoresHtml += '<div class="ranking-item" onclick="focusMunicipio(\"' + d.ibge + '\')">' +
             '<span class="pos">' + (i+1) + '</span>' +
             '<span class="name">' + d.nome + '</span>' +
             '<span class="value red">' + formatCurrency(d.valor) + '</span></div>';
     });
     document.getElementById('tab-menores').innerHTML = menoresHtml;
 }
-
 function focusMunicipio(ibge) {
     var mapId = document.querySelector('.folium-map').id;
     var map = window[mapId];
     if (!map) return;
-    
     map.eachLayer(function(layer) {
         if (layer.feature && layer.feature.properties) {
             var props = layer.feature.properties;
@@ -366,7 +337,6 @@ function focusMunicipio(ibge) {
         }
     });
 }
-
 function updateSelectedInfo(ibge) {
     var d = municipiosIndex[ibge];
     if (!d) return;
@@ -376,7 +346,6 @@ function updateSelectedInfo(ibge) {
     document.getElementById('selected-pop').textContent = formatNumber(d.populacao);
     document.getElementById('selected-percap').textContent = formatCurrency(d.percapita);
 }
-
 function clearSelection() {
     if (selectedLayer) {
         var oldV = selectedLayer.feature.properties.valor_investimento;
@@ -388,21 +357,16 @@ function clearSelection() {
     }
     document.getElementById('selected-info').style.display = 'none';
 }
-
 function initSearch() {
     var input = document.getElementById('search-input');
     var results = document.getElementById('search-results');
-    
     input.addEventListener('input', function() {
         var q = this.value.toLowerCase().trim();
         if (q.length < 2) { results.style.display = 'none'; return; }
-        
         var matches = municipiosData.filter(function(d) {
             return d.nome.toLowerCase().indexOf(q) !== -1;
         }).slice(0, 15);
-        
         if (matches.length === 0) { results.style.display = 'none'; return; }
-        
         results.innerHTML = '';
         matches.forEach(function(d) {
             var div = document.createElement('div');
@@ -412,22 +376,18 @@ function initSearch() {
         });
         results.style.display = 'block';
     });
-    
     document.addEventListener('click', function(e) {
         if (!e.target.closest('#search-box')) results.style.display = 'none';
     });
 }
-
 document.addEventListener('DOMContentLoaded', function() {
     buildRankings();
     initSearch();
     document.getElementById('btn-clear-selection').addEventListener('click', clearSelection);
-    
     setTimeout(function() {
         var mapId = document.querySelector('.folium-map').id;
         var map = window[mapId];
         if (!map) return;
-        
         map.eachLayer(function(layer) {
             if (layer.feature && layer.feature.properties) {
                 layer.on({
@@ -450,9 +410,9 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 500);
 });
 </script>
-</body>"""
+"""
 
-html = html.replace("</body>", js_extra)
+html = html.replace("</body>", js_code + "\n</body>")
 
 with open(html_path, "w", encoding="utf-8") as f:
     f.write(html)
